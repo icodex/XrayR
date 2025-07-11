@@ -22,6 +22,7 @@ import (
 	"github.com/XrayR-project/XrayR/api/newV2board"
 	"github.com/XrayR-project/XrayR/api/pmpanel"
 	"github.com/XrayR-project/XrayR/api/proxypanel"
+	"github.com/XrayR-project/XrayR/api/spanel"
 	"github.com/XrayR-project/XrayR/api/sspanel"
 	"github.com/XrayR-project/XrayR/api/v2raysocks"
 	"github.com/XrayR-project/XrayR/app/mydispatcher"
@@ -193,6 +194,8 @@ func (p *Panel) Start() {
 			apiClient = bunpanel.New(nodeConfig.ApiConfig)
 		case "PPanel":
 			apiClient = ppanel.New(nodeConfig.ApiConfig)
+		case "SPanel":
+			apiClient = spanel.New(nodeConfig.ApiConfig)
 		default:
 			log.Panicf("Unsupport panel type: %s", nodeConfig.PanelType)
 		}
