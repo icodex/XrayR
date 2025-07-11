@@ -68,7 +68,8 @@ type route struct {
 }
 
 type user struct {
-	Id         int    `json:"id"`
-	Uuid       string `json:"uuid"`
-	SpeedLimit int    `json:"speed_limit"`
+	Id			int    `json:"id"`
+	Uuid		string `json:"uuid"`
+	SpeedLimit	int    `json:"speed_limit"`
+	DeviceLimit	int    `json:"device_limit"`
 }

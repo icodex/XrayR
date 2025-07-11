@@ -20,6 +20,7 @@ import (
 	"golang.org/x/time/rate"
 
 	"github.com/XrayR-project/XrayR/api"
+	log "github.com/sirupsen/logrus"
 )
 
 type UserInfo struct {
@@ -37,6 +38,7 @@ type InboundInfo struct {
 	GlobalLimit    struct {
 		config         *GlobalDeviceLimitConfig
 		globalOnlineIP *marshaler.Marshaler
+		redisClient    *redis.Client
 	}
 }
 
@@ -64,15 +66,16 @@ func (l *Limiter) AddInboundLimiter(tag string, nodeSpeedLimit uint64, userList 
 		// init local store
 		gs := goCacheStore.NewGoCache(goCache.New(time.Duration(globalLimit.Expiry)*time.Second, 1*time.Minute))
 
-		// init redis store
-		rs := redisStore.NewRedis(redis.NewClient(
+		rdb := redis.NewClient(
 			&redis.Options{
 				Network:  globalLimit.RedisNetwork,
 				Addr:     globalLimit.RedisAddr,
 				Username: globalLimit.RedisUsername,
 				Password: globalLimit.RedisPassword,
 				DB:       globalLimit.RedisDB,
-			}),
+			})
+		// init redis store
+		rs := redisStore.NewRedis(rdb,
 			store.WithExpiration(time.Duration(globalLimit.Expiry)*time.Second))
 
 		// init chained cache. First use local go-cache, if go-cache is nil, then use redis cache
@@ -81,6 +84,7 @@ func (l *Limiter) AddInboundLimiter(tag string, nodeSpeedLimit uint64, userList 
 			cache.New[any](rs),
 		)
 		inboundInfo.GlobalLimit.globalOnlineIP = marshaler.New(cacheManager)
+		inboundInfo.GlobalLimit.redisClient = rdb
 	}
 
 	userMap := new(sync.Map)
@@ -230,32 +234,44 @@ func globalLimit(inboundInfo *InboundInfo, email string, uid int, ip string, dev
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(inboundInfo.GlobalLimit.config.Timeout)*time.Second)
 	defer cancel()
 
-	// reformat email for unique key
-	uniqueKey := strings.Replace(email, inboundInfo.Tag, strconv.Itoa(deviceLimit), 1)
+	// Key to scan for devices, get length(device limit)
+	getNumDeviceKey := strings.Replace(email, inboundInfo.Tag, strconv.Itoa(deviceLimit), 1) 
 
-	v, err := inboundInfo.GlobalLimit.globalOnlineIP.Get(ctx, uniqueKey, new(map[string]int))
+	// Key to handle IP expiry base on configuration, if user active connect to it within X mins, to extend the expiry time
+	ipKey := fmt.Sprintf("%s|%s", getNumDeviceKey, ip)
+
+	device, err := inboundInfo.GlobalLimit.globalOnlineIP.Get(ctx, ipKey, new(map[string]int)) // no need v as we scanning keys
 	if err != nil {
 		if _, ok := err.(*store.NotFound); ok {
-			// If the email is a new device
-			go pushIP(inboundInfo, uniqueKey, &map[string]int{ip: uid})
+			log.Printf("store not found, could be new ip, proceed below instead of push to check limit")
 		} else {
 			errors.LogErrorInner(context.Background(), err, "cache service")
 		}
-		return false
 	}
 
-	ipMap := v.(*map[string]int)
+	deviceMap, ok := device.(*map[string]int)
+	if ok {
+		if uidVal, exists := (*deviceMap)[ip]; exists {
+			log.Printf("%s: Current device already connected with UID %d, extending TTL", ip, uidVal)
+			go pushIP(inboundInfo, ipKey, &map[string]int{ip: uid}) // Extend TTL
+			return false
+		}
+	}
+
+	ipCount, err := countIPsForKey(ctx, inboundInfo.GlobalLimit.redisClient, getNumDeviceKey)
+	if err != nil {
+		errors.LogErrorInner(ctx, err, "scanning Redis keys")
+		return false
+	}
+	log.Printf("Current Count: %d", ipCount)
+
 	// Reject device reach limit directly
-	if deviceLimit > 0 && len(*ipMap) > deviceLimit {
+	if deviceLimit > 0 && ipCount > deviceLimit {
+		log.Printf("Limit hit, rejecting the following IP: %s", ip)
 		return true
 	}
 
-	// If the ip is not in cache
-	if _, ok := (*ipMap)[ip]; !ok {
-		(*ipMap)[ip] = uid
-		go pushIP(inboundInfo, uniqueKey, ipMap)
-	}
-
+	go pushIP(inboundInfo, ipKey, &map[string]int{ip: uid})//should extend the expiry time
 	return false
 }
 
@@ -267,6 +283,29 @@ func pushIP(inboundInfo *InboundInfo, uniqueKey string, ipMap *map[string]int) {
 	if err := inboundInfo.GlobalLimit.globalOnlineIP.Set(ctx, uniqueKey, ipMap); err != nil {
 		errors.LogErrorInner(context.Background(), err, "cache service")
 	}
+}
+
+func countIPsForKey(ctx context.Context, rdb *redis.Client, uniqueKey string) (int, error) {
+	var cursor uint64
+	var count int
+
+	pattern := uniqueKey + "|*"
+
+	for {
+		keys, newCursor, err := rdb.Scan(ctx, cursor, pattern, 100).Result()
+		if err != nil {
+			return 0, err
+		}
+
+		count += len(keys)
+
+		if newCursor == 0 {
+			break
+		}
+		cursor = newCursor
+	}
+
+	return count, nil
 }
 
 // determineRate returns the minimum non-zero rate
