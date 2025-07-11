@@ -251,7 +251,14 @@ func (c *APIClient) GetUserList() (UserList *[]api.UserInfo, err error) {
 			u.SpeedLimit = uint64(users[i].SpeedLimit * 1000000 / 8)
 		}
 
-		u.DeviceLimit = c.DeviceLimit // todo waiting v2board send configuration
+		// u.DeviceLimit = c.DeviceLimit // todo waiting v2board send configuration
+		if users[i].DeviceLimit > 0 {
+			log.Printf("GetUserList Device limit (%d): %d", users[i].Id, users[i].DeviceLimit)
+			u.DeviceLimit = users[i].DeviceLimit
+		} else {
+			u.DeviceLimit = c.DeviceLimit
+		}
+
 		u.Email = u.UUID + "@v2board.user"
 		if c.NodeType == "Shadowsocks" {
 			u.Passwd = u.UUID
