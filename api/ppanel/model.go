@@ -63,6 +63,8 @@ type (
 		Fingerprint       string `json:"fingerprint"`
 		RealityPrivateKey string `json:"reality_private_key"`
 		RealityPublicKey  string `json:"reality_public_key"`
+		RealityServerAddr string `json:"reality_server_addr"`
+		RealityServerPort int    `json:"reality_server_port"`
 		RealityShortId    string `json:"reality_short_id"`
 	}
 	GetServerUserListResponse struct {

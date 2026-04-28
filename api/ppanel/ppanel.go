@@ -14,12 +14,13 @@ import (
 )
 
 type APIClient struct {
-	client   *resty.Client
-	APIHost  string
-	ServerID int
-	Secret   string
-	Protocol string
-	eTags    map[string]string
+	client		*resty.Client
+	APIHost		string
+	EnableVless	bool
+	ServerID	int
+	Secret		string
+	Protocol	string
+	eTags		map[string]string
 }
 
 func New(apiConfig *api.Config) *APIClient {
@@ -39,30 +40,30 @@ func New(apiConfig *api.Config) *APIClient {
 		}
 	})
 	client.SetBaseURL(apiConfig.APIHost)
+
+	var nodeType string
+
+	if apiConfig.NodeType == "V2ray" && apiConfig.EnableVless {
+		nodeType = "vless"
+	} else {
+		nodeType = strings.ToLower(apiConfig.NodeType)
+	}
+
 	// Create Key for each requests
 	client.SetQueryParams(map[string]string{
 		"server_id":  strconv.Itoa(apiConfig.NodeID),
-		"protocol":   strings.ToLower(apiConfig.NodeType),
+		"protocol":   nodeType,
 		"secret_key": apiConfig.Key,
 	})
 	return &APIClient{
-		client:   client,
-		APIHost:  apiConfig.APIHost,
-		ServerID: apiConfig.NodeID,
-		Secret:   apiConfig.Key,
-		Protocol: apiConfig.NodeType,
-		eTags:    make(map[string]string),
+		client:			client,
+		APIHost:		apiConfig.APIHost,
+		EnableVless:	apiConfig.EnableVless,
+		ServerID:		apiConfig.NodeID,
+		Secret:			apiConfig.Key,
+		Protocol:		apiConfig.NodeType,
+		eTags:			make(map[string]string),
 	}
-}
-
-// Describe return a description of the client
-func (c *APIClient) Describe() api.ClientInfo {
-	return api.ClientInfo{APIHost: c.APIHost, NodeID: c.ServerID, Key: c.Secret, NodeType: c.Protocol}
-}
-
-// Debug set the client debug for client
-func (c *APIClient) Debug() {
-	c.client.SetDebug(true)
 }
 
 // assembleURL assemble the URL
@@ -78,6 +79,7 @@ func (c *APIClient) GetNodeInfo() (nodeInfo *api.NodeInfo, err error) {
 		SetHeader("If-None-Match", c.eTags["node"]).
 		ForceContentType("application/json").
 		SetResult(&config).Get(path)
+
 	if err != nil {
 		return nil, fmt.Errorf("request %s failed: %v", c.assembleURL(path), err)
 	}
@@ -145,18 +147,14 @@ func (c *APIClient) parseVlessConfig(config *Vless) (*api.NodeInfo, error) {
 		header        json.RawMessage
 		enableTLS     bool
 		enableReality bool
-		dest          string
 	)
 
 	if config == nil {
-		return nil, fmt.Errorf("vmess config is nil,server id: %v，invalid response: %v", c.ServerID, config)
+		return nil, fmt.Errorf("vless config is nil,server id: %v，invalid response: %v", c.ServerID, config)
 	}
 
-	if config.SecurityConfig.SNI != "" {
-		dest = config.SecurityConfig.SNI
-	}
 	realityConfig := api.REALITYConfig{
-		Dest:             dest + ":" + strconv.Itoa(config.Port),
+		Dest:             config.SecurityConfig.RealityServerAddr + ":" + strconv.Itoa(config.SecurityConfig.RealityServerPort),
 		ProxyProtocolVer: 0,
 		ServerNames: []string{
 			config.SecurityConfig.SNI,
@@ -181,7 +179,7 @@ func (c *APIClient) parseVlessConfig(config *Vless) (*api.NodeInfo, error) {
 	}
 	return &api.NodeInfo{
 		NodeID:            c.ServerID,
-		NodeType:          "V2ray",
+		NodeType:          c.Protocol,
 		Port:              uint32(config.Port),
 		Host:              config.TransportConfig.Host,
 		Path:              config.TransportConfig.Path,
@@ -189,6 +187,7 @@ func (c *APIClient) parseVlessConfig(config *Vless) (*api.NodeInfo, error) {
 		Header:            header,
 		ServiceName:       config.TransportConfig.ServiceName,
 		TransportProtocol: config.Transport,
+		EnableVless:       c.EnableVless,
 		EnableTLS:         enableTLS,
 		EnableREALITY:     enableReality,
 		REALITYConfig:     &realityConfig,
@@ -204,7 +203,7 @@ func (c *APIClient) parseVmessConfig(config *Vmess) (*api.NodeInfo, error) {
 
 	return &api.NodeInfo{
 		NodeID:            c.ServerID,
-		NodeType:          "V2ray",
+		NodeType:          c.Protocol,
 		Port:              uint32(config.Port),
 		Host:              config.TransportConfig.Host,
 		Path:              config.TransportConfig.Path,
@@ -219,7 +218,7 @@ func (c *APIClient) parseVmessConfig(config *Vmess) (*api.NodeInfo, error) {
 func (c *APIClient) parseTrojanConfig(config *Trojan) (*api.NodeInfo, error) {
 	return &api.NodeInfo{
 		NodeID:            c.ServerID,
-		NodeType:          "Trojan",
+		NodeType:          c.Protocol,
 		Port:              uint32(config.Port),
 		TransportProtocol: "tcp",
 		EnableTLS:         true,
@@ -235,6 +234,7 @@ func (c *APIClient) GetUserList() (userList *[]api.UserInfo, err error) {
 		SetHeader("If-None-Match", c.eTags["user"]).
 		ForceContentType("application/json").
 		SetResult(&result).Get(path)
+
 	if err != nil {
 		return nil, fmt.Errorf("request %s failed: %v", c.assembleURL(path), err.Error())
 	}
@@ -267,6 +267,7 @@ func (c *APIClient) ReportNodeStatus(nodeStatus *api.NodeStatus) (err error) {
 		Disk:      nodeStatus.Disk,
 		UpdatedAt: time.Now().UnixMilli(),
 	}
+
 	if _, err = c.client.R().SetBody(status).ForceContentType("application/json").Post(path); err != nil {
 		return fmt.Errorf("request %s failed: %v", c.assembleURL(path), err.Error())
 	}
@@ -307,6 +308,11 @@ func (c *APIClient) ReportUserTraffic(userTraffic *[]api.UserTraffic) (err error
 	return nil
 }
 
+// Describe return a description of the client
+func (c *APIClient) Describe() api.ClientInfo {
+	return api.ClientInfo{APIHost: c.APIHost, NodeID: c.ServerID, Key: c.Secret, NodeType: c.Protocol}
+}
+
 func (c *APIClient) GetNodeRule() (ruleList *[]api.DetectRule, err error) {
 	list := make([]api.DetectRule, 0)
 	return &list, nil
@@ -314,4 +320,9 @@ func (c *APIClient) GetNodeRule() (ruleList *[]api.DetectRule, err error) {
 
 func (c *APIClient) ReportIllegal(detectResultList *[]api.DetectResult) (err error) {
 	return nil
+}
+
+// Debug set the client debug for client
+func (c *APIClient) Debug() {
+	c.client.SetDebug(true)
 }

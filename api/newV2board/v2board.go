@@ -398,8 +398,22 @@ func (c *APIClient) parseV2rayNodeResponse(s *serverConfig) (*api.NodeInfo, erro
 		ShortIds:         []string{s.VlessTlsSettings.ShortId},
 	}
 
+	// if c.EnableVless {
+	// 	s.NetworkSettings = s.VlessNetworkSettings
+	// }
 	if c.EnableVless {
-		s.NetworkSettings = s.VlessNetworkSettings
+		if s.NetworkSettings.ServiceName == "" && s.VlessNetworkSettings.ServiceName != "" {
+			s.NetworkSettings.ServiceName = s.VlessNetworkSettings.ServiceName
+		}
+		if s.NetworkSettings.Host == "" && s.VlessNetworkSettings.Host != "" {
+			s.NetworkSettings.Host = s.VlessNetworkSettings.Host
+		}
+		if s.NetworkSettings.Headers == nil && s.VlessNetworkSettings.Headers != nil {
+			s.NetworkSettings.Headers = s.VlessNetworkSettings.Headers
+		}
+		if s.NetworkSettings.Header == nil && s.VlessNetworkSettings.Header != nil {
+			s.NetworkSettings.Header = s.VlessNetworkSettings.Header
+		}
 	}
 
 	switch s.Network {
